@@ -1,0 +1,32 @@
+#!/bin/bash
+# tasks.md schema validator — sandbox mock.
+# 검사: 각 task에 5개 필수 필드 (Time / Files (allowlist) / Acceptance / Relevant Invariants / Depends on) 존재.
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: validate-tasks-md <tasks.md path>..."
+  exit 2
+fi
+
+FAIL=0
+for FILE in "$@"; do
+  if [ ! -f "$FILE" ]; then
+    echo "ERROR: $FILE not found"
+    FAIL=1
+    continue
+  fi
+  echo "Validating: $FILE"
+  REQUIRED=("Time:" "Files (allowlist)" "Acceptance" "Relevant Invariants" "Depends on")
+  for FIELD in "${REQUIRED[@]}"; do
+    if ! grep -qF "$FIELD" "$FILE"; then
+      echo "  MISSING: $FIELD"
+      FAIL=1
+    fi
+  done
+done
+
+if [ "$FAIL" -eq 0 ]; then
+  echo "All tasks.md files valid."
+else
+  exit 1
+fi

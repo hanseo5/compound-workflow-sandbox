@@ -1,0 +1,127 @@
+name: codex-gate
+on: [pull_request]
+jobs:
+  # 0) path-label-valid — 모든 PR에 적용. path label이 정확히 1개 있어야 함 (없거나 ≥2개면 fail)
+  path-label-valid:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify exactly one path label
+        env:
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          # JSON 파싱하여 정확한 라벨 이름 매칭 (substring 매칭 회피).
+          COUNT=$(echo "$LABELS_JSON" | python3 -c "
+          import json, sys
+          labels = json.load(sys.stdin)
+          valid = {'path:p1','path:p2','path:p2-backfill','path:p3','path:p4','path:p5','path:p6'}
+          matches = [l for l in labels if l in valid]
+          print(len(matches))
+          ")
+          if [ "$COUNT" -eq 1 ]; then
+            echo "Path label OK (exactly one)"
+          elif [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: PR must have exactly one of path:{p1,p2,p2-backfill,p3,p4,p5,p6} (found 0)."
+            exit 1
+          else
+            echo "ERROR: PR must have exactly one path label, found $COUNT."
+            exit 1
+          fi
+
+  # 1) tasks-md-valid — Path P6 / P2-backfill만 적용
+  tasks-md-valid:
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'path:p6') || contains(github.event.pull_request.labels.*.name, 'path:p2-backfill')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tasks.md schema
+        run: bin/validate-tasks-md specs/*/tasks.md
+
+  # 2) codex-review-pass — hotfix(path:p2) 제외 모든 path
+  codex-review-pass:
+    runs-on: ubuntu-latest
+    if: '!contains(github.event.pull_request.labels.*.name, ''path:p2'')'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mock codex review (sandbox — reads canned output from PR branch)
+        # 실제 환경에선 'npm install -g @openai/codex' + 'codex review --base ...'.
+        # 샌드박스는 mock-codex-output.txt를 읽어서 canned output 사용.
+        run: |
+          if [ -f mock-codex-output.txt ]; then
+            cp mock-codex-output.txt codex-output.txt
+          else
+            echo "No mock-codex-output.txt — defaulting to clean (no findings)"
+            echo "" > codex-output.txt
+          fi
+          # P1/P2는 waiver 불가
+          if grep -q '\[P1\]' codex-output.txt; then
+            echo "ERROR: P1 (critical) finding(s). Merge blocked."
+            exit 1
+          fi
+          if grep -q '\[P2\]' codex-output.txt; then
+            echo "ERROR: P2 (high) finding(s). Merge blocked."
+            exit 1
+          fi
+          P3_COUNT=$(grep -c '\[P3\]' codex-output.txt || true)
+          if [ "$P3_COUNT" -ge 3 ]; then
+            echo "P3_REQUIRES_WAIVER=true" >> $GITHUB_ENV
+          fi
+      - name: Verify P3 waiver section if required
+        if: env.P3_REQUIRES_WAIVER == 'true'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "$PR_BODY" | python3 -c "
+          import sys, re
+          body = sys.stdin.read()
+          m = re.search(r'## Waiver.*?(?=\n## |\Z)', body, re.S)
+          if not m:
+              print('ERROR: P3 ≥ 3 requires ## Waiver section in PR body.')
+              sys.exit(1)
+          section = m.group(0)
+          required = ['사유:', '처리 일정:', '추적 issue:']
+          for tag in required:
+              line = next((l for l in section.splitlines() if l.strip().startswith(tag)), None)
+              if not line or not line.split(tag, 1)[1].strip():
+                  print(f'ERROR: Waiver missing or empty field: {tag}')
+                  sys.exit(1)
+          print('Waiver OK')
+          "
+
+  # 3) challenge-pass — modifier:m1~m4 라벨 시 필수.
+  challenge-pass:
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'modifier:m1') ||
+      contains(github.event.pull_request.labels.*.name, 'modifier:m2') ||
+      contains(github.event.pull_request.labels.*.name, 'modifier:m3') ||
+      contains(github.event.pull_request.labels.*.name, 'modifier:m4')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify latest codex-challenge result (path-aware)
+        env:
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          BRANCH_SLUG=$(echo "$HEAD_REF" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          if echo "$LABELS_JSON" | python3 -c "
+          import json, sys
+          labels = json.load(sys.stdin)
+          spec_paths = {'path:p6', 'path:p2-backfill'}
+          sys.exit(0 if any(l in spec_paths for l in labels) else 1)
+          "; then
+            NNN=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -oE 'specs/[0-9]+' | head -1 | sed 's|specs/||')
+            if [ -z "$NNN" ]; then echo "No NNN spec found in diff"; exit 1; fi
+            LATEST=$(ls -1 specs/$NNN/codex-challenge-*.md 2>/dev/null | sort -V | tail -1)
+          else
+            LATEST=$(ls -1 docs/challenges/${BRANCH_SLUG}-*.md 2>/dev/null | sort -V | tail -1)
+          fi
+          if [ -z "$LATEST" ]; then echo "ERROR: No challenge result found for this PR"; exit 1; fi
+          if grep -q '\[BREAKAGE\]' "$LATEST"; then
+            echo "ERROR: Challenge has unresolved BREAKAGE."
+            exit 1
+          fi
+          echo "Verified: $LATEST (breakage=0)"

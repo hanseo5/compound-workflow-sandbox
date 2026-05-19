@@ -84,9 +84,12 @@ jobs:
               sys.exit(1)
           section = m.group(0)
           required = ['사유:', '처리 일정:', '추적 issue:']
+          # v2.1.11 (ML-015): markdown list prefix 정규화 후 매칭 — PR template 의 `- 사유:` 형식 지원.
+          def normalize(line):
+              return re.sub(r'^\s*[-*+]\s*', '', line)
           for tag in required:
-              line = next((l for l in section.splitlines() if l.strip().startswith(tag)), None)
-              if not line or not line.split(tag, 1)[1].strip():
+              line = next((l for l in section.splitlines() if normalize(l).startswith(tag)), None)
+              if not line or not normalize(line).split(tag, 1)[1].strip():
                   print(f'ERROR: Waiver missing or empty field: {tag}')
                   sys.exit(1)
           print('Waiver OK')

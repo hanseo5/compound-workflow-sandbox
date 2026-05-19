@@ -1,7 +1,8 @@
 name: codex-gate
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # v2.1.10: labeled/unlabeled/edited 명시 — Tier 0 + Phase A meta-review 도출
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 jobs:
   # 0) path-label-valid — 모든 PR에 적용. path label이 정확히 1개 있어야 함 (없거나 ≥2개면 fail)
   path-label-valid:

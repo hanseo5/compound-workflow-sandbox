@@ -1,6 +1,7 @@
 #!/bin/bash
 # tasks.md schema validator — sandbox mock.
 # 검사: 각 task에 5개 필수 필드 (Time / Files (allowlist) / Acceptance / Relevant Invariants / Depends on) 존재.
+# v2.1.11 (ML-008): markdown bold (**Time**:) / italic (_Time_:) / list (- Time:) 등 형식 변형 모두 허용.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -17,8 +18,11 @@ for FILE in "$@"; do
   fi
   echo "Validating: $FILE"
   REQUIRED=("Time:" "Files (allowlist)" "Acceptance" "Relevant Invariants" "Depends on")
+  # markdown 변형을 strip — bold (**), italic (_), code (`) 모두 제거 후 fixed-string 매칭.
+  # leading list prefix 도 제거. 이렇게 하면 `- **Time**:` / `- Time:` / `Time:` 모두 동일하게 잡힘.
+  NORMALIZED=$(sed -E -e 's/[*_`]//g' -e 's/^[[:space:]]*[-*+][[:space:]]*//' "$FILE")
   for FIELD in "${REQUIRED[@]}"; do
-    if ! grep -qF "$FIELD" "$FILE"; then
+    if ! printf '%s\n' "$NORMALIZED" | grep -qF "$FIELD"; then
       echo "  MISSING: $FIELD"
       FAIL=1
     fi

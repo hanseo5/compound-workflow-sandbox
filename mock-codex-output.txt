@@ -1,0 +1,5 @@
+Codex review findings (mock):
+
+[P3] Consider extracting common pagination logic into shared util.
+[P3] Add JSDoc to public API methods.
+[P3] Replace any[] with proper generics in apiClient.
